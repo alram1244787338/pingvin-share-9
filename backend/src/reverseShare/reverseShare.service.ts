@@ -16,16 +16,23 @@ export class ReverseShareService {
 
   async create(data: CreateReverseShareDTO, creatorId: string) {
     // Parse date string to date
-    const expirationDate = moment()
-      .add(
-        data.shareExpiration.split("-")[0],
-        data.shareExpiration.split(
-          "-",
-        )[1] as moment.unitOfTime.DurationConstructor,
-      )
-      .toDate();
-
-    const parsedExpiration = parseRelativeDateToAbsolute(data.shareExpiration);
+    let expirationDate: Date;
+    let parsedExpiration: Date;
+    try {
+      parsedExpiration = parseRelativeDateToAbsolute(data.shareExpiration);
+      expirationDate = moment()
+        .add(
+          data.shareExpiration.split("-")[0],
+          data.shareExpiration.split(
+            "-",
+          )[1] as moment.unitOfTime.DurationConstructor,
+        )
+        .toDate();
+    } catch (e) {
+      throw new BadRequestException(
+        `Invalid expiration format: "${data.shareExpiration}"`,
+      );
+    }
     const maxExpiration = this.config.get("share.maxExpiration");
     if (
       maxExpiration.value !== 0 &&

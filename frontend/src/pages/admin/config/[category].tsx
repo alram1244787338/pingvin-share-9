@@ -64,13 +64,17 @@ export default function AppShellDemo() {
     }
 
     if (updatedConfigVariables.length > 0) {
-      await configService
-        .updateMany(updatedConfigVariables)
-        .then(() => {
-          setUpdatedConfigVariables([]);
-          toast.success(t("admin.config.notify.success"));
-        })
-        .catch(toast.axiosError);
+      try {
+        await configService.updateMany(updatedConfigVariables);
+        setUpdatedConfigVariables([]);
+        toast.success(t("admin.config.notify.success"));
+        // Reload config variables to reflect saved state
+        configService.getByCategory(categoryId).then((vars) => {
+          setConfigVariables(vars);
+        });
+      } catch (e: any) {
+        toast.axiosError(e);
+      }
       void config.refresh();
     } else {
       toast.success(t("admin.config.notify.no-changes"));

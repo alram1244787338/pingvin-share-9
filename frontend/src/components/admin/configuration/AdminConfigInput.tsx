@@ -8,7 +8,11 @@ import {
 } from "@mantine/core";
 import { useForm } from "@mantine/form";
 import { AdminConfig, UpdateConfig } from "../../../types/config.type";
-import { stringToTimespan, timespanToString } from "../../../utils/date.util";
+import {
+  isValidTimespan,
+  stringToTimespan,
+  timespanToString,
+} from "../../../utils/date.util";
 import FileSizeInput from "../../core/FileSizeInput";
 import TimespanInput from "../../core/TimespanInput";
 
@@ -35,6 +39,14 @@ const AdminConfigInput = ({
     form.setFieldValue(`${configVariable.type}Value`, value);
     updateConfigVariable({ key: configVariable.key, value: value });
   };
+
+  // For timespan type, if stored value is malformed, fall back to default
+  const timespanValue =
+    configVariable.type === "timespan"
+      ? isValidTimespan(configVariable.value)
+        ? stringToTimespan(configVariable.value)
+        : stringToTimespan(configVariable.defaultValue)
+      : undefined;
 
   return (
     <Stack align="end">
@@ -100,9 +112,9 @@ const AdminConfigInput = ({
           />
         </>
       )}
-      {configVariable.type == "timespan" && (
+      {configVariable.type == "timespan" && timespanValue && (
         <TimespanInput
-          value={stringToTimespan(configVariable.value)}
+          value={timespanValue}
           disabled={!configVariable.allowEdit}
           onChange={(timespan) =>
             onValueChange(configVariable, timespanToString(timespan))

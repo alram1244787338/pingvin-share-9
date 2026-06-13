@@ -10,7 +10,11 @@ import * as argon from "argon2";
 import { EventEmitter } from "events";
 import * as fs from "fs";
 import { PrismaService } from "src/prisma/prisma.service";
-import { stringToTimespan } from "src/utils/date.util";
+import {
+  isValidTimespan,
+  stringToTimespan,
+  TIMESPAN_MAX_VALUE,
+} from "src/utils/date.util";
 import { parse as yamlParse } from "yaml";
 import { YamlConfig } from "../../prisma/seed/config.seed";
 import { CONFIG_FILE } from "src/constants";
@@ -101,12 +105,29 @@ export class ConfigService extends EventEmitter {
 
     const value = configVariable.value ?? configVariable.defaultValue;
 
-    if (configVariable.type == "number" || configVariable.type == "filesize")
-      return parseInt(value);
+    if (configVariable.type == "number" || configVariable.type == "filesize") {
+      const parsed = parseInt(value);
+      if (isNaN(parsed)) {
+        this.logger.warn(
+          `Config ${key} has non-numeric value "${value}", falling back to default`,
+        );
+        return parseInt(configVariable.defaultValue);
+      }
+      return parsed;
+    }
     if (configVariable.type == "boolean") return value == "true";
     if (configVariable.type == "string" || configVariable.type == "text")
       return value;
-    if (configVariable.type == "timespan") return stringToTimespan(value);
+    if (configVariable.type == "timespan") {
+      // Defensive: if stored value is malformed, log and fall back to default
+      if (value && !isValidTimespan(value)) {
+        this.logger.warn(
+          `Config ${key} has invalid timespan value "${value}", falling back to default "${configVariable.defaultValue}"`,
+        );
+        return stringToTimespan(configVariable.defaultValue);
+      }
+      return stringToTimespan(value);
+    }
   }
 
   async getByCategory(category: string) {
@@ -202,7 +223,11 @@ export class ConfigService extends EventEmitter {
   }
 
   validateConfigVariable(key: string, value: string | number | boolean) {
-    const validations = [
+    const validations: {
+      key: string;
+      condition: (value: any) => boolean;
+      message: string;
+    }[] = [
       {
         key: "share.shareIdLength",
         condition: (value: number) => value >= 2 && value <= 50,
@@ -213,12 +238,32 @@ export class ConfigService extends EventEmitter {
         condition: (value: number) => value >= 0 && value <= 9,
         message: "Zip compression level must be between 0 and 9",
       },
-      // TODO add validation for timespan type
     ];
 
     const validation = validations.find((validation) => validation.key == key);
     if (validation && !validation.condition(value as any)) {
       throw new BadRequestException(validation.message);
+    }
+
+    // Validate all timespan-type config variables
+    const configVariable = this.configVariables.find(
+      (v) => `${v.category}.${v.name}` === key,
+    );
+    if (configVariable?.type === "timespan") {
+      if (value === null || value === undefined || value === "") {
+        throw new BadRequestException(
+          `Timespan config "${key}" cannot be empty`,
+        );
+      }
+      const strValue = String(value).trim();
+      if (!isValidTimespan(strValue)) {
+        throw new BadRequestException(
+          `Invalid timespan format for "${key}". ` +
+            `Expected format: "<number> <unit>" where number is 0-${TIMESPAN_MAX_VALUE} ` +
+            `and unit is one of: minutes, hours, days, weeks, months, years. ` +
+            `Got: "${strValue}"`,
+        );
+      }
     }
   }
 

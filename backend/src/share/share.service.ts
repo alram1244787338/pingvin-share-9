@@ -52,7 +52,14 @@ export class ShareService {
     if (reverseShare) {
       expirationDate = reverseShare.shareExpiration;
     } else {
-      const parsedExpiration = parseRelativeDateToAbsolute(share.expiration);
+      let parsedExpiration: Date;
+      try {
+        parsedExpiration = parseRelativeDateToAbsolute(share.expiration);
+      } catch (e) {
+        throw new BadRequestException(
+          `Invalid expiration format: "${share.expiration}"`,
+        );
+      }
 
       const expiresNever = moment(0).toDate() == parsedExpiration;
 
