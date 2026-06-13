@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Timespan } from "../../types/timespan.type";
 import { NativeSelect, NumberInput } from "@mantine/core";
 import useTranslate from "../../hooks/useTranslate.hook";
+import { MAX_TIMESPAN_VALUE } from "../../utils/date.util";
 
 const TimespanInput = ({
   label,
@@ -71,7 +72,7 @@ const TimespanInput = ({
       label={label}
       value={inputValue}
       min={0}
-      max={999999}
+      max={MAX_TIMESPAN_VALUE}
       precision={0}
       rightSection={unitSelect}
       rightSectionWidth={120}

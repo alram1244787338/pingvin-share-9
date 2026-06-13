@@ -10,10 +10,22 @@ import * as argon from "argon2";
 import { EventEmitter } from "events";
 import * as fs from "fs";
 import { PrismaService } from "src/prisma/prisma.service";
-import { stringToTimespan } from "src/utils/date.util";
+import {
+  parseTimespan,
+  stringToTimespan,
+  validateTimespanString,
+} from "src/utils/date.util";
 import { parse as yamlParse } from "yaml";
 import { YamlConfig } from "../../prisma/seed/config.seed";
 import { CONFIG_FILE } from "src/constants";
+
+/**
+ * Config variables of type `timespan`. Listing them here lets
+ * `validateConfigVariable` enforce the timespan rules even when it is called
+ * without an explicit `type` (e.g. from tests), and documents which keys the
+ * timespan handling applies to.
+ */
+const TIMESPAN_CONFIG_KEYS = ["general.sessionDuration", "share.maxExpiration"];
 
 /**
  * ConfigService extends EventEmitter to allow listening for config updates,
@@ -106,7 +118,20 @@ export class ConfigService extends EventEmitter {
     if (configVariable.type == "boolean") return value == "true";
     if (configVariable.type == "string" || configVariable.type == "text")
       return value;
-    if (configVariable.type == "timespan") return stringToTimespan(value);
+    if (configVariable.type == "timespan") {
+      const parsed = parseTimespan(value);
+      if (parsed) return parsed;
+
+      // Historical / dirty value that predates validation — never let it crash
+      // a consumer (share creation, session renewal, the config endpoint, …).
+      // Fall back to this variable's own default rather than a generic value:
+      // e.g. `general.sessionDuration` must stay "3 months", not "0 days",
+      // which would expire every session immediately.
+      this.logger.warn(
+        `Config variable "${key}" has an invalid timespan value "${value}". Falling back to its default "${configVariable.defaultValue}".`,
+      );
+      return stringToTimespan(configVariable.defaultValue);
+    }
   }
 
   async getByCategory(category: string) {
@@ -142,6 +167,13 @@ export class ConfigService extends EventEmitter {
         "You are only allowed to update config variables via the config.yaml file",
       );
 
+    // Validate the whole batch up-front so a single invalid value (e.g. a bad
+    // timespan) rejects the entire save instead of leaving a partial update
+    // where some variables were already written.
+    for (const variable of data) {
+      await this.assertValidUpdate(variable.key, variable.value);
+    }
+
     const response: Config[] = [];
 
     for (const variable of data) {
@@ -157,6 +189,39 @@ export class ConfigService extends EventEmitter {
         "You are only allowed to update config variables via the config.yaml file",
       );
 
+    const { normalizedValue } = await this.assertValidUpdate(key, value);
+
+    const updatedVariable = await this.prisma.config.update({
+      where: {
+        name_category: {
+          category: key.split(".")[0],
+          name: key.split(".")[1],
+        },
+      },
+      data: {
+        value: normalizedValue === null ? null : normalizedValue.toString(),
+      },
+    });
+
+    this.configVariables = await this.prisma.config.findMany();
+
+    this.emit("update", key, normalizedValue);
+
+    return updatedVariable;
+  }
+
+  /**
+   * Looks up a config variable, normalizes the incoming value (empty string ->
+   * null) and runs every validation rule without persisting anything. Throws on
+   * the first problem so callers can validate before writing.
+   */
+  private async assertValidUpdate(
+    key: string,
+    value: string | number | boolean,
+  ): Promise<{
+    configVariable: Config;
+    normalizedValue: string | number | boolean | null;
+  }> {
     const configVariable = await this.prisma.config.findUnique({
       where: {
         name_category: {
@@ -169,11 +234,13 @@ export class ConfigService extends EventEmitter {
     if (!configVariable || configVariable.locked)
       throw new NotFoundException("Config variable not found");
 
-    if (value === "") {
-      value = null;
+    let normalizedValue: string | number | boolean | null = value;
+
+    if (normalizedValue === "") {
+      normalizedValue = null;
     } else if (
-      typeof value != configVariable.type &&
-      typeof value == "string" &&
+      typeof normalizedValue != configVariable.type &&
+      typeof normalizedValue == "string" &&
       configVariable.type != "text" &&
       configVariable.type != "timespan"
     ) {
@@ -182,26 +249,16 @@ export class ConfigService extends EventEmitter {
       );
     }
 
-    this.validateConfigVariable(key, value);
+    this.validateConfigVariable(key, normalizedValue, configVariable.type);
 
-    const updatedVariable = await this.prisma.config.update({
-      where: {
-        name_category: {
-          category: key.split(".")[0],
-          name: key.split(".")[1],
-        },
-      },
-      data: { value: value === null ? null : value.toString() },
-    });
-
-    this.configVariables = await this.prisma.config.findMany();
-
-    this.emit("update", key, value);
-
-    return updatedVariable;
+    return { configVariable, normalizedValue };
   }
 
-  validateConfigVariable(key: string, value: string | number | boolean) {
+  validateConfigVariable(
+    key: string,
+    value: string | number | boolean | null,
+    type?: string,
+  ) {
     const validations = [
       {
         key: "share.shareIdLength",
@@ -213,12 +270,27 @@ export class ConfigService extends EventEmitter {
         condition: (value: number) => value >= 0 && value <= 9,
         message: "Zip compression level must be between 0 and 9",
       },
-      // TODO add validation for timespan type
     ];
 
     const validation = validations.find((validation) => validation.key == key);
     if (validation && !validation.condition(value as any)) {
       throw new BadRequestException(validation.message);
+    }
+
+    // Timespan validation. A null value means "reset to default" and is safe
+    // (the default is always valid), so only non-null values are checked.
+    const isTimespan =
+      type === "timespan" || TIMESPAN_CONFIG_KEYS.includes(key);
+    if (isTimespan && value !== null && value !== undefined) {
+      // `0` means "no maximum" for `share.maxExpiration`, but for durations
+      // such as `general.sessionDuration` a value of `0` would expire tokens
+      // immediately and lock everyone out, so it must stay positive.
+      const allowZero = key !== "general.sessionDuration";
+
+      const error = validateTimespanString(value, { allowZero });
+      if (error) {
+        throw new BadRequestException(`Config variable "${key}" ${error}.`);
+      }
     }
   }
 
