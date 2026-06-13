@@ -118,7 +118,12 @@ export class AuthService {
   }
 
   async generateToken(user: User, oauth?: { idToken?: string }) {
-    // TODO: Make all old loginTokens invalid when a new one is created
+    // Invalidate all existing login tokens when a new login flow is initiated
+    await this.prisma.loginToken.updateMany({
+      where: { userId: user.id, used: false },
+      data: { used: true },
+    });
+
     // Check if the user has TOTP enabled
     if (user.totpVerified && !(oauth && this.config.get("oauth.ignoreTotp"))) {
       const loginToken = await this.createLoginToken(user.id);
@@ -195,8 +200,17 @@ export class AuthService {
   }
 
   async updatePassword(user: User, newPassword: string, oldPassword?: string) {
+    // LDAP users cannot change their password through this application
+    if (user.ldapDN) {
+      throw new ForbiddenException(
+        "This account can't change its password here. Please contact your administrator.",
+      );
+    }
+
     const isPasswordValid =
-      !user.password || (await argon.verify(user.password, oldPassword));
+      user.password && oldPassword
+        ? await argon.verify(user.password, oldPassword)
+        : false;
 
     if (!isPasswordValid) throw new ForbiddenException("Invalid password");
 
@@ -204,6 +218,12 @@ export class AuthService {
 
     await this.prisma.refreshToken.deleteMany({
       where: { userId: user.id },
+    });
+
+    // Invalidate all login tokens when password changes
+    await this.prisma.loginToken.updateMany({
+      where: { userId: user.id, used: false },
+      data: { used: true },
     });
 
     await this.prisma.user.update({
@@ -373,11 +393,20 @@ export class AuthService {
     }
   }
 
-  async verifyPassword(user: User, password: string) {
+  async verifyPassword(user: User, password: string): Promise<boolean> {
+    // LDAP users (no local password stored): authenticate against LDAP server
     if (!user.password && this.config.get("ldap.enabled")) {
-      return !!this.ldapService.authenticateUser(user.username, password);
+      const ldapResult = await this.ldapService.authenticateUser(
+        user.username,
+        password,
+      );
+      return !!ldapResult;
     }
 
+    // Local users: verify against stored argon2 hash
+    if (!user.password) {
+      return false;
+    }
     return argon.verify(user.password, password);
   }
 }

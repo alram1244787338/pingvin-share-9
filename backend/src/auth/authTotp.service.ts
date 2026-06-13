@@ -21,6 +21,7 @@ export class AuthTotpService {
   ) {}
 
   async signInTotp(dto: AuthSignInTotpDTO) {
+    // Look up the login token
     const token = await this.prisma.loginToken.findFirst({
       where: {
         token: dto.loginToken,
@@ -30,33 +31,82 @@ export class AuthTotpService {
       },
     });
 
+    // Token not found or already consumed — use the same generic message
+    // so attackers can't enumerate valid tokens
     if (!token || token.used)
-      throw new UnauthorizedException("Invalid login token");
+      throw new UnauthorizedException(
+        "Invalid or expired login token",
+        "token_invalid",
+      );
 
+    // Token expired
     if (token.expiresAt < new Date())
-      throw new UnauthorizedException("Login token expired", "token_expired");
+      throw new UnauthorizedException(
+        "Login session expired, please sign in again",
+        "token_expired",
+      );
 
-    // Check the TOTP code
-    const { totpSecret } = token.user;
+    // Re-fetch user from DB to get the latest TOTP state, in case
+    // TOTP was disabled or the secret was reset after the login token
+    // was originally created.
+    const currentUser = await this.prisma.user.findUnique({
+      where: { id: token.user.id },
+    });
 
-    if (!totpSecret) {
-      throw new BadRequestException("TOTP is not enabled");
+    if (!currentUser) {
+      throw new UnauthorizedException(
+        "Invalid or expired login token",
+        "token_invalid",
+      );
     }
 
-    if (!authenticator.check(dto.totp, totpSecret)) {
-      throw new BadRequestException("Invalid code");
+    // If TOTP has been disabled since the login token was issued,
+    // the login token is no longer valid for TOTP sign-in.
+    if (!currentUser.totpEnabled || !currentUser.totpVerified) {
+      // Mark this stale token as used so it can't be retried
+      await this.prisma.loginToken.update({
+        where: { token: token.token },
+        data: { used: true },
+      });
+      throw new UnauthorizedException(
+        "Two-factor authentication has been disabled on this account",
+        "totp_disabled",
+      );
     }
 
-    // Set the login token to used
+    // Check the TOTP secret exists (defensive — the totpVerified check
+    // above should have caught this, but guard against inconsistent data)
+    if (!currentUser.totpSecret) {
+      await this.prisma.loginToken.update({
+        where: { token: token.token },
+        data: { used: true },
+      });
+      throw new UnauthorizedException(
+        "Two-factor authentication has been disabled on this account",
+        "totp_disabled",
+      );
+    }
+
+    // Verify the TOTP code using authenticator.check which allows
+    // a small timing window (±1 step) for clock skew
+    if (!authenticator.check(dto.totp, currentUser.totpSecret)) {
+      throw new UnauthorizedException(
+        "Invalid verification code",
+        "totp_invalid",
+      );
+    }
+
+    // Mark the login token as consumed BEFORE issuing tokens,
+    // so a concurrent replay attempt will see used=true above.
     await this.prisma.loginToken.update({
       where: { token: token.token },
       data: { used: true },
     });
 
     const { refreshToken, refreshTokenId } =
-      await this.authService.createRefreshToken(token.user.id);
+      await this.authService.createRefreshToken(currentUser.id);
     const accessToken = await this.authService.createAccessToken(
-      token.user,
+      currentUser,
       refreshTokenId,
     );
 
@@ -64,8 +114,12 @@ export class AuthTotpService {
   }
 
   async enableTotp(user: User, password: string) {
-    if (!this.authService.verifyPassword(user, password))
-      throw new ForbiddenException("Invalid password");
+    const isPasswordValid = await this.authService.verifyPassword(
+      user,
+      password,
+    );
+    if (!isPasswordValid)
+      throw new ForbiddenException("Invalid password", "password_invalid");
 
     // Check if we have a secret already
     const { totpVerified } = await this.prisma.user.findUnique({
@@ -74,7 +128,10 @@ export class AuthTotpService {
     });
 
     if (totpVerified) {
-      throw new BadRequestException("TOTP is already enabled");
+      throw new BadRequestException(
+        "Two-factor authentication is already enabled",
+        "totp_already_enabled",
+      );
     }
 
     const issuer = this.configService.get("general.appName");
@@ -106,8 +163,12 @@ export class AuthTotpService {
   }
 
   async verifyTotp(user: User, password: string, code: string) {
-    if (!this.authService.verifyPassword(user, password))
-      throw new ForbiddenException("Invalid password");
+    const isPasswordValid = await this.authService.verifyPassword(
+      user,
+      password,
+    );
+    if (!isPasswordValid)
+      throw new ForbiddenException("Invalid password", "password_invalid");
 
     const { totpSecret } = await this.prisma.user.findUnique({
       where: { id: user.id },
@@ -115,13 +176,19 @@ export class AuthTotpService {
     });
 
     if (!totpSecret) {
-      throw new BadRequestException("TOTP is not in progress");
+      throw new BadRequestException(
+        "Two-factor authentication setup has not been started",
+        "totp_not_in_progress",
+      );
     }
 
-    const expected = authenticator.generate(totpSecret);
-
-    if (code !== expected) {
-      throw new BadRequestException("Invalid code");
+    // Use authenticator.check for timing-window tolerance instead of
+    // exact string comparison with a freshly generated code.
+    if (!authenticator.check(code, totpSecret)) {
+      throw new BadRequestException(
+        "Invalid verification code",
+        "totp_invalid",
+      );
     }
 
     await this.prisma.user.update({
@@ -135,8 +202,12 @@ export class AuthTotpService {
   }
 
   async disableTotp(user: User, password: string, code: string) {
-    if (!this.authService.verifyPassword(user, password))
-      throw new ForbiddenException("Invalid password");
+    const isPasswordValid = await this.authService.verifyPassword(
+      user,
+      password,
+    );
+    if (!isPasswordValid)
+      throw new ForbiddenException("Invalid password", "password_invalid");
 
     const { totpSecret } = await this.prisma.user.findUnique({
       where: { id: user.id },
@@ -144,13 +215,17 @@ export class AuthTotpService {
     });
 
     if (!totpSecret) {
-      throw new BadRequestException("TOTP is not enabled");
+      throw new BadRequestException(
+        "Two-factor authentication is not enabled",
+        "totp_not_enabled",
+      );
     }
 
-    const expected = authenticator.generate(totpSecret);
-
-    if (code !== expected) {
-      throw new BadRequestException("Invalid code");
+    if (!authenticator.check(code, totpSecret)) {
+      throw new BadRequestException(
+        "Invalid verification code",
+        "totp_invalid",
+      );
     }
 
     await this.prisma.user.update({
