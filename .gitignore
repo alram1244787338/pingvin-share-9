@@ -1,50 +1,37 @@
-# dependencies
-node_modules
-.pnp
-.pnp.js
-
-# next.js
-/frontend/.next/
-/frontend/out/
-
-# yarn
-yarn.lock
-
-# build
-build/
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+*.egg
 dist/
+build/
+.eggs/
+.venv/
+venv/
+env/
+*.whl
 
-# misc
-.DS_Store
-*.pem
+# Go
+vendor/
+go.sum
 
-# debug
+# Node / npm
+node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-.pnpm-debug.log*
+package-lock.json
+yarn.lock
 
-# env file
-.env
-!/backend/prisma/.env
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
 
-# vercel
-.vercel
-
-# typescript
-*.tsbuildinfo
-
-# PWA
-/frontend/public/workbox-*
-/frontend/public/sw.*
-
-# project specific
-/backend/data/
-/data/
-/docs/build/
-/docs/.docusaurus
-/docs/.cache-loader
-/config.yaml
-
-# Jetbrains specific (webstorm)
-.idea/**/**
+# OS
+.DS_Store
+Thumbs.db
