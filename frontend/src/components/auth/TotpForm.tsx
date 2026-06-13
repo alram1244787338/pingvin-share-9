@@ -50,6 +50,16 @@ function TotpForm({ redirectPath }: { redirectPath: string }) {
       await router.replace(safeRedirectPath(redirectPath));
     } catch (e) {
       toast.axiosError(e);
+
+      // A dead login token (expired, already used or otherwise invalid) can't
+      // be recovered on this page, so send the user back to sign in to obtain a
+      // fresh one. A wrong code keeps them here so they can retry.
+      const errorCode = (e as any)?.response?.data?.error;
+      if (errorCode === "token_expired" || errorCode === "invalid_token") {
+        await router.replace("/auth/signIn");
+        return;
+      }
+
       form.setFieldError("code", "error");
     } finally {
       setLoading(false);

@@ -118,9 +118,10 @@ export class AuthService {
   }
 
   async generateToken(user: User, oauth?: { idToken?: string }) {
-    // TODO: Make all old loginTokens invalid when a new one is created
     // Check if the user has TOTP enabled
     if (user.totpVerified && !(oauth && this.config.get("oauth.ignoreTotp"))) {
+      // createLoginToken invalidates any login token previously issued for this
+      // user, so re-initiating a login revokes older (still unused) tokens.
       const loginToken = await this.createLoginToken(user.id);
 
       return { loginToken };
@@ -192,6 +193,11 @@ export class AuthService {
       where: { id: user.id },
       data: { password: newPasswordHash },
     });
+
+    // Resetting the password invalidates existing sessions and any pending
+    // login (TOTP) token so none of them survive the change.
+    await this.prisma.refreshToken.deleteMany({ where: { userId: user.id } });
+    await this.prisma.loginToken.deleteMany({ where: { userId: user.id } });
   }
 
   async updatePassword(user: User, newPassword: string, oldPassword?: string) {
@@ -203,6 +209,12 @@ export class AuthService {
     const hash = await argon.hash(newPassword);
 
     await this.prisma.refreshToken.deleteMany({
+      where: { userId: user.id },
+    });
+
+    // Changing the password must also revoke any pending login (TOTP) token so
+    // a token issued before the change can't be used afterwards.
+    await this.prisma.loginToken.deleteMany({
       where: { userId: user.id },
     });
 
@@ -318,6 +330,12 @@ export class AuthService {
   }
 
   async createLoginToken(userId: string) {
+    // Invalidate any login token that was previously issued for this user.
+    // Without this, re-initiating a login (or re-opening the TOTP page) would
+    // leave several valid tokens around, and an old one could still be
+    // exchanged for a session.
+    await this.prisma.loginToken.deleteMany({ where: { userId } });
+
     const loginToken = (
       await this.prisma.loginToken.create({
         data: { userId, expiresAt: moment().add(5, "minutes").toDate() },
@@ -374,8 +392,22 @@ export class AuthService {
   }
 
   async verifyPassword(user: User, password: string) {
-    if (!user.password && this.config.get("ldap.enabled")) {
-      return !!this.ldapService.authenticateUser(user.username, password);
+    // Users authenticated through LDAP don't have a local password hash, so
+    // their password has to be verified against the LDAP server.
+    // authenticateUser is async: it MUST be awaited, otherwise the always
+    // truthy Promise would let any password through.
+    if (!user.password) {
+      if (this.config.get("ldap.enabled")) {
+        const ldapUser = await this.ldapService.authenticateUser(
+          user.username,
+          password,
+        );
+        return !!ldapUser;
+      }
+
+      // No local password and LDAP is disabled (e.g. an OAuth-only account):
+      // there is nothing to verify the password against, so deny.
+      return false;
     }
 
     return argon.verify(user.password, password);
