@@ -1,4 +1,4 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, NotFoundException } from "@nestjs/common";
 import { LocalFileService } from "./local.service";
 import { S3FileService } from "./s3.service";
 import { ConfigService } from "src/config/config.service";
@@ -45,6 +45,9 @@ export class FileService {
     const share = await this.prisma.share.findFirst({
       where: { id: shareId },
     });
+    if (!share) {
+      throw new NotFoundException("Share not found");
+    }
     const storageService = this.getStorageService(share.storageProvider);
     return storageService.get(shareId, fileId);
   }

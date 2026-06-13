@@ -262,11 +262,15 @@ export class ShareService {
       },
     });
 
+    if (!share)
+      throw new NotFoundException("Share not found");
+
     if (share.removedReason)
       throw new NotFoundException(share.removedReason, "share_removed");
 
-    if (!share || !share.uploadLocked)
+    if (!share.uploadLocked)
       throw new NotFoundException("Share not found");
+
     return {
       ...share,
       hasPassword: !!share.security?.password,
@@ -278,7 +282,13 @@ export class ShareService {
       where: { id },
     });
 
-    if (!share || !share.uploadLocked)
+    if (!share)
+      throw new NotFoundException("Share not found");
+
+    if (share.removedReason)
+      throw new NotFoundException(share.removedReason, "share_removed");
+
+    if (!share.uploadLocked)
       throw new NotFoundException("Share not found");
 
     return share;
@@ -299,7 +309,8 @@ export class ShareService {
   }
 
   async isShareCompleted(id: string) {
-    return (await this.prisma.share.findUnique({ where: { id } })).uploadLocked;
+    const share = await this.prisma.share.findUnique({ where: { id } });
+    return share?.uploadLocked ?? false;
   }
 
   async isShareIdAvailable(id: string) {
@@ -322,7 +333,16 @@ export class ShareService {
       },
     });
 
-    if (share?.security?.password) {
+    if (!share)
+      throw new NotFoundException("Share not found");
+
+    if (share.removedReason)
+      throw new NotFoundException(share.removedReason, "share_removed");
+
+    if (!share.uploadLocked)
+      throw new NotFoundException("Share not found");
+
+    if (share.security?.password) {
       if (!password) {
         throw new ForbiddenException(
           "This share is password protected",
@@ -352,9 +372,14 @@ export class ShareService {
   }
 
   async generateShareToken(shareId: string) {
-    const { expiration, createdAt } = await this.prisma.share.findUnique({
+    const share = await this.prisma.share.findUnique({
       where: { id: shareId },
     });
+
+    if (!share)
+      throw new NotFoundException("Share not found");
+
+    const { expiration, createdAt } = share;
 
     const tokenPayload = {
       shareId,
@@ -374,9 +399,15 @@ export class ShareService {
   }
 
   async verifyShareToken(shareId: string, token: string) {
-    const { expiration, createdAt } = await this.prisma.share.findUnique({
+    const share = await this.prisma.share.findUnique({
       where: { id: shareId },
     });
+
+    if (!share) return false;
+
+    if (share.removedReason) return false;
+
+    const { expiration, createdAt } = share;
 
     try {
       const claims = this.jwtService.verify(token, {

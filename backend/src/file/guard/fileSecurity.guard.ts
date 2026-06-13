@@ -40,11 +40,22 @@ export class FileSecurityGuard extends ShareSecurityGuard {
 
     // If there is no share token the user requests a file directly
     if (!shareToken) {
+      if (!share) {
+        throw new NotFoundException("File not found");
+      }
+
+      if (share.removedReason) {
+        throw new NotFoundException("File not found");
+      }
+
       if (
-        !share ||
-        (moment().isAfter(share.expiration) &&
-          !moment(share.expiration).isSame(0))
+        moment().isAfter(share.expiration) &&
+        !moment(share.expiration).isSame(0)
       ) {
+        throw new NotFoundException("File not found");
+      }
+
+      if (!share.uploadLocked) {
         throw new NotFoundException("File not found");
       }
 

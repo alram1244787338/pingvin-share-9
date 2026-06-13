@@ -9,6 +9,7 @@ import useTranslate, {
 const showEnterPasswordModal = (
   modals: ModalsContextProps,
   submitCallback: (password: string) => Promise<void>,
+  initialPasswordWrong = false,
 ) => {
   const t = translateOutsideContext();
   return modals.openModal({
@@ -16,17 +17,24 @@ const showEnterPasswordModal = (
     withCloseButton: false,
     closeOnEscape: false,
     title: t("share.modal.password.title"),
-    children: <Body submitCallback={submitCallback} />,
+    children: (
+      <Body
+        submitCallback={submitCallback}
+        initialPasswordWrong={initialPasswordWrong}
+      />
+    ),
   });
 };
 
 const Body = ({
   submitCallback,
+  initialPasswordWrong,
 }: {
   submitCallback: (password: string) => Promise<void>;
+  initialPasswordWrong: boolean;
 }) => {
   const [password, setPassword] = useState("");
-  const [passwordWrong, setPasswordWrong] = useState(false);
+  const [passwordWrong, setPasswordWrong] = useState(initialPasswordWrong);
   const t = useTranslate();
   return (
     <Stack align="stretch">

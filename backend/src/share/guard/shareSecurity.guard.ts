@@ -39,11 +39,19 @@ export class ShareSecurityGuard extends JwtGuard {
       include: { security: true, reverseShare: true },
     });
 
+    if (!share)
+      throw new NotFoundException("Share not found");
+
+    if (share.removedReason)
+      throw new NotFoundException(share.removedReason, "share_removed");
+
     if (
-      !share ||
-      (moment().isAfter(share.expiration) &&
-        !moment(share.expiration).isSame(0))
+      moment().isAfter(share.expiration) &&
+      !moment(share.expiration).isSame(0)
     )
+      throw new NotFoundException("Share not found");
+
+    if (!share.uploadLocked)
       throw new NotFoundException("Share not found");
 
     if (share.security?.password && !shareToken)

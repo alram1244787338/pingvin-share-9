@@ -23,6 +23,7 @@ export function getServerSideProps(context: GetServerSidePropsContext) {
 const Share = ({ shareId }: { shareId: string }) => {
   const modals = useModals();
   const [share, setShare] = useState<ShareType>();
+  const [hasError, setHasError] = useState(false);
   const t = useTranslate();
 
   const getShareToken = async (password?: string) => {
@@ -33,7 +34,9 @@ const Share = ({ shareId }: { shareId: string }) => {
         getFiles();
       })
       .catch((e) => {
-        const { error } = e.response.data;
+        const status = e.response?.status;
+        const { error } = e.response?.data || {};
+
         if (error == "share_max_views_exceeded") {
           showErrorModal(
             modals,
@@ -43,21 +46,9 @@ const Share = ({ shareId }: { shareId: string }) => {
           );
         } else if (error == "share_password_required") {
           showEnterPasswordModal(modals, getShareToken);
-        } else {
-          toast.axiosError(e);
-        }
-      });
-  };
-
-  const getFiles = async () => {
-    shareService
-      .get(shareId)
-      .then((share) => {
-        setShare(share);
-      })
-      .catch((e) => {
-        const { error } = e.response.data;
-        if (e.response.status == 404) {
+        } else if (error == "wrong_password") {
+          showEnterPasswordModal(modals, getShareToken, true);
+        } else if (status == 404 || error == "share_removed") {
           if (error == "share_removed") {
             showErrorModal(
               modals,
@@ -73,7 +64,44 @@ const Share = ({ shareId }: { shareId: string }) => {
               "go-home",
             );
           }
-        } else if (e.response.status == 403 && error == "private_share") {
+        } else {
+          toast.axiosError(e);
+        }
+      });
+  };
+
+  const getFiles = async () => {
+    shareService
+      .get(shareId)
+      .then((share) => {
+        setShare(share);
+        setHasError(false);
+      })
+      .catch((e) => {
+        const status = e.response?.status;
+        const { error } = e.response?.data || {};
+
+        // Clear share data on any error to avoid stale UI
+        setShare(undefined);
+        setHasError(true);
+
+        if (status == 404) {
+          if (error == "share_removed") {
+            showErrorModal(
+              modals,
+              t("share.error.removed.title"),
+              e.response.data.message,
+              "go-home",
+            );
+          } else {
+            showErrorModal(
+              modals,
+              t("share.error.not-found.title"),
+              t("share.error.not-found.description"),
+              "go-home",
+            );
+          }
+        } else if (status == 403 && error == "private_share") {
           showErrorModal(
             modals,
             t("share.error.access-denied.title"),
@@ -128,14 +156,16 @@ const Share = ({ shareId }: { shareId: string }) => {
           )}
         </Box>
 
-        {share?.files.length > 1 && <DownloadAllButton shareId={shareId} />}
+        {share?.files?.length > 1 && !hasError && (
+          <DownloadAllButton shareId={shareId} />
+        )}
       </Group>
 
       <FileList
         files={share?.files}
         setShare={setShare}
         share={share!}
-        isLoading={!share}
+        isLoading={!share && !hasError}
       />
     </>
   );
