@@ -33,7 +33,8 @@ const Share = ({ shareId }: { shareId: string }) => {
         getFiles();
       })
       .catch((e) => {
-        const { error } = e.response.data;
+        const status = e?.response?.status;
+        const error = e?.response?.data?.error;
         if (error == "share_max_views_exceeded") {
           showErrorModal(
             modals,
@@ -42,22 +43,12 @@ const Share = ({ shareId }: { shareId: string }) => {
             "go-home",
           );
         } else if (error == "share_password_required") {
+          // (Re)open the password prompt so the user can enter / retry it.
           showEnterPasswordModal(modals, getShareToken);
-        } else {
-          toast.axiosError(e);
-        }
-      });
-  };
-
-  const getFiles = async () => {
-    shareService
-      .get(shareId)
-      .then((share) => {
-        setShare(share);
-      })
-      .catch((e) => {
-        const { error } = e.response.data;
-        if (e.response.status == 404) {
+        } else if (error == "wrong_password") {
+          // Leave the password modal open and tell the user it was wrong.
+          toast.error(t("share.modal.error.invalid-password"));
+        } else if (status == 404) {
           if (error == "share_removed") {
             showErrorModal(
               modals,
@@ -73,7 +64,51 @@ const Share = ({ shareId }: { shareId: string }) => {
               "go-home",
             );
           }
-        } else if (e.response.status == 403 && error == "private_share") {
+        } else if (status == 403 && error == "private_share") {
+          showErrorModal(
+            modals,
+            t("share.error.access-denied.title"),
+            t("share.error.access-denied.description"),
+          );
+        } else if (e?.response) {
+          toast.axiosError(e);
+        } else {
+          showErrorModal(
+            modals,
+            t("common.error"),
+            t("common.error.unknown"),
+            "go-home",
+          );
+        }
+      });
+  };
+
+  const getFiles = async () => {
+    shareService
+      .get(shareId)
+      .then((share) => {
+        setShare(share);
+      })
+      .catch((e) => {
+        const status = e?.response?.status;
+        const error = e?.response?.data?.error;
+        if (status == 404) {
+          if (error == "share_removed") {
+            showErrorModal(
+              modals,
+              t("share.error.removed.title"),
+              e.response.data.message,
+              "go-home",
+            );
+          } else {
+            showErrorModal(
+              modals,
+              t("share.error.not-found.title"),
+              t("share.error.not-found.description"),
+              "go-home",
+            );
+          }
+        } else if (status == 403 && error == "private_share") {
           showErrorModal(
             modals,
             t("share.error.access-denied.title"),
@@ -83,6 +118,13 @@ const Share = ({ shareId }: { shareId: string }) => {
           showEnterPasswordModal(modals, getShareToken);
         } else if (error == "share_token_required") {
           getShareToken();
+        } else if (error == "share_max_views_exceeded") {
+          showErrorModal(
+            modals,
+            t("share.error.visitor-limit-exceeded.title"),
+            t("share.error.visitor-limit-exceeded.description"),
+            "go-home",
+          );
         } else {
           showErrorModal(
             modals,
@@ -128,7 +170,9 @@ const Share = ({ shareId }: { shareId: string }) => {
           )}
         </Box>
 
-        {share?.files.length > 1 && <DownloadAllButton shareId={shareId} />}
+        {(share?.files?.length ?? 0) > 1 && (
+          <DownloadAllButton shareId={shareId} />
+        )}
       </Group>
 
       <FileList

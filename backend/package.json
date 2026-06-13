@@ -7,6 +7,7 @@
     "prod": "prisma migrate deploy && prisma db seed && node dist/src/main",
     "lint": "eslint 'src/**/*.ts'",
     "format": "prettier --end-of-line=auto --write 'src/**/*.ts'",
+    "test:unit": "cross-env TS_NODE_TRANSPILE_ONLY=1 node -r ts-node/register -r tsconfig-paths/register test/share.service.spec.ts",
     "test:system": "prisma migrate reset -f && nest start & wait-on http://localhost:8080/api/configs && newman run ./test/newman-system-tests.json"
   },
   "prisma": {

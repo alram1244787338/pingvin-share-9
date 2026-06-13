@@ -8,6 +8,7 @@ import toast from "../../utils/toast.util";
 const DownloadAllButton = ({ shareId }: { shareId: string }) => {
   const [isZipReady, setIsZipReady] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [isUnavailable, setIsUnavailable] = useState(false);
   const t = useTranslate();
 
   const downloadAll = async () => {
@@ -21,7 +22,7 @@ const DownloadAllButton = ({ shareId }: { shareId: string }) => {
     shareService
       .getMetaData(shareId)
       .then((share) => setIsZipReady(share.isZipReady))
-      .catch(() => {});
+      .catch(() => setIsUnavailable(true));
 
     const timer = setInterval(() => {
       shareService
@@ -30,7 +31,13 @@ const DownloadAllButton = ({ shareId }: { shareId: string }) => {
           setIsZipReady(share.isZipReady);
           if (share.isZipReady) clearInterval(timer);
         })
-        .catch(() => clearInterval(timer));
+        .catch(() => {
+          // The share was removed / expired while this page was open: stop
+          // polling and disable the button so the list state and the button
+          // state stay in sync instead of letting the download silently fail.
+          setIsUnavailable(true);
+          clearInterval(timer);
+        });
     }, 5000);
     return () => {
       clearInterval(timer);
@@ -41,8 +48,11 @@ const DownloadAllButton = ({ shareId }: { shareId: string }) => {
     <Button
       variant="outline"
       loading={isLoading}
+      disabled={isUnavailable}
       onClick={() => {
-        if (!isZipReady) {
+        if (isUnavailable) {
+          toast.error(t("share.error.not-found.title"));
+        } else if (!isZipReady) {
           toast.error(t("share.notify.download-all-preparing"));
         } else {
           downloadAll();

@@ -137,6 +137,8 @@ export class ShareService {
       },
     });
 
+    if (!share) throw new NotFoundException("Share not found");
+
     if (await this.isShareCompleted(id))
       throw new BadRequestException("Share already completed");
 
@@ -262,11 +264,16 @@ export class ShareService {
       },
     });
 
+    // Order matters: a missing share must be caught before any property is
+    // accessed, otherwise an invalid/deleted shareId turns into a 500 instead
+    // of a clean 404.
+    if (!share) throw new NotFoundException("Share not found");
+
     if (share.removedReason)
       throw new NotFoundException(share.removedReason, "share_removed");
 
-    if (!share || !share.uploadLocked)
-      throw new NotFoundException("Share not found");
+    if (!share.uploadLocked) throw new NotFoundException("Share not found");
+
     return {
       ...share,
       hasPassword: !!share.security?.password,
@@ -278,8 +285,14 @@ export class ShareService {
       where: { id },
     });
 
-    if (!share || !share.uploadLocked)
-      throw new NotFoundException("Share not found");
+    // Keep this aligned with get() so the page and the metadata polling
+    // (e.g. DownloadAllButton) never disagree about a share's availability.
+    if (!share) throw new NotFoundException("Share not found");
+
+    if (share.removedReason)
+      throw new NotFoundException(share.removedReason, "share_removed");
+
+    if (!share.uploadLocked) throw new NotFoundException("Share not found");
 
     return share;
   }
@@ -299,7 +312,8 @@ export class ShareService {
   }
 
   async isShareCompleted(id: string) {
-    return (await this.prisma.share.findUnique({ where: { id } })).uploadLocked;
+    const share = await this.prisma.share.findUnique({ where: { id } });
+    return !!share?.uploadLocked;
   }
 
   async isShareIdAvailable(id: string) {
@@ -322,7 +336,17 @@ export class ShareService {
       },
     });
 
-    if (share?.security?.password) {
+    // Reject non-existent, removed and not-yet-completed shares with the same
+    // error codes as get(), so a single scenario can't yield a token from one
+    // endpoint while another reports it as gone.
+    if (!share) throw new NotFoundException("Share not found");
+
+    if (share.removedReason)
+      throw new NotFoundException(share.removedReason, "share_removed");
+
+    if (!share.uploadLocked) throw new NotFoundException("Share not found");
+
+    if (share.security?.password) {
       if (!password) {
         throw new ForbiddenException(
           "This share is password protected",
@@ -352,9 +376,13 @@ export class ShareService {
   }
 
   async generateShareToken(shareId: string) {
-    const { expiration, createdAt } = await this.prisma.share.findUnique({
+    const share = await this.prisma.share.findUnique({
       where: { id: shareId },
     });
+
+    if (!share) throw new NotFoundException("Share not found");
+
+    const { expiration, createdAt } = share;
 
     const tokenPayload = {
       shareId,
@@ -374,9 +402,16 @@ export class ShareService {
   }
 
   async verifyShareToken(shareId: string, token: string) {
-    const { expiration, createdAt } = await this.prisma.share.findUnique({
+    const share = await this.prisma.share.findUnique({
       where: { id: shareId },
     });
+
+    // A stale token pointing at a share that no longer exists must fail
+    // verification gracefully (-> 403/404 downstream) instead of throwing,
+    // which would otherwise surface as a 500 when refreshing old links.
+    if (!share) return false;
+
+    const { expiration, createdAt } = share;
 
     try {
       const claims = this.jwtService.verify(token, {
